@@ -1,0 +1,170 @@
+#include <DHT.h>
+#include <Servo.h>
+#include <Stepper.h>
+#include <LiquidCrystal_I2C.h>
+
+#define I2C_ADDR    0x27
+#define LCD_COLUMNS 20
+#define LCD_LINES   4
+// LDR Characteristics
+#define GAMMA 0.7
+#define RL10 50
+// Pin Definitions
+#define dhtPin 2           // DHT22 sensor pin
+#define fanStepperPin4 6   // Stepper motor pin 1
+#define fanStepperPin3 5   // Stepper motor pin 2
+#define fanStepperPin2 4   // Stepper motor pin 3
+#define fanStepperPin1 3   // Stepper motor pin 4
+#define lightSensorPin A0  // LDR pin
+#define ultrasonicTrigPin 7  // Ultrasonic sensor trigger pin
+#define ultrasonicEchoPin 8  // Ultrasonic sensor echo pin
+#define servoPin 9         // Servo motor pin
+#define led 18             // LED Anode Pin
+// Thresholds
+#define lightThreshold 400 // Threshold in Lux
+#define doorOpenDistanceThreshold 200 // Threshold in Centimeters
+#define doorOpenDelay 4000 // Delay threshold in Milli Secs
+
+// Global Variables
+DHT dht(dhtPin, DHT22);
+Stepper fanStepper(180, fanStepperPin1, fanStepperPin2, fanStepperPin3, fanStepperPin4);
+Servo servoMotor;
+LiquidCrystal_I2C lcd(I2C_ADDR, LCD_COLUMNS, LCD_LINES);
+int fanSpeed;
+bool doorIsOpen;
+int doorOpenTime;
+
+void setup() {
+  // Serial.begin(9600);
+  dht.begin();
+  fanStepper.setSpeed(4000);  // Adjust the speed as needed
+  fanSpeed = 0;
+  servoMotor.attach(servoPin);
+  pinMode(ultrasonicTrigPin, OUTPUT);
+  pinMode(ultrasonicEchoPin, INPUT);
+  pinMode(lightSensorPin, INPUT);
+  pinMode(led, OUTPUT);
+  doorOpenTime = 0;
+  doorIsOpen = false;
+  digitalWrite(led, LOW);
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Temp: ");
+  lcd.setCursor(0, 1);
+  lcd.print("Humidity: ");
+  lcd.setCursor(0, 2);
+  lcd.print("FanSpeed: ");
+  lcd.setCursor(0, 3);
+  lcd.print("Door:Clsd");
+  lcd.setCursor(11, 3);
+  lcd.print("Light:Off");
+  closeDoor();
+}
+
+void loop() {
+
+  // Read ultrasonic distance
+  int distance = readUltrasonicDistance();
+  // Control door
+  if (distance <= doorOpenDistanceThreshold) {
+    if (!doorIsOpen) {
+      openDoor();
+    }
+    doorOpenTime = millis();
+  } else {
+    if (doorIsOpen) {
+      if (millis() - doorOpenTime >= doorOpenDelay) {
+        closeDoor();
+        doorOpenTime = 0;
+      }
+    } else {
+      closeDoor();
+      doorOpenTime = 0;
+    }
+  }
+
+  // Read light sensor value
+  int analogValue = analogRead(lightSensorPin);
+  float voltage = analogValue / 1024. * 5;
+  float resistance = 2000 * voltage / (1 - voltage / 5);
+  float lux = pow(RL10 * 1e3 * pow(10, GAMMA) / resistance, (1 / GAMMA));
+  // Control lights
+  if (lux < lightThreshold) {
+    enableLights();
+  } else {
+    disableLights();
+  }
+
+  // Read temperature and humidity
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  // Update fan speed based on temperature and humidity
+  fanSpeed = calculateFanSpeed(temperature, humidity);
+  // Control Fan Speed
+  fanStepper.step(fanSpeed * 10);
+  // Update LCD display
+  lcd.setCursor(6, 0);
+  lcd.print(temperature);
+  lcd.setCursor(10, 1);
+  lcd.print(humidity);
+  lcd.setCursor(10, 2);
+  lcd.print(fanSpeed);
+
+  delay(100);  // Delay to slow down sensor readings and actions
+}
+
+int readUltrasonicDistance() {
+  digitalWrite(ultrasonicTrigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ultrasonicTrigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ultrasonicTrigPin, LOW);
+  return pulseIn(ultrasonicEchoPin, HIGH) * 0.0343 / 2;
+}
+
+int calculateFanSpeed(float temperature, float humidity) {
+  if (temperature <= 25) {
+    return 0;
+  } else if (temperature > 25 && temperature <= 29) {
+    if (humidity >= 40 && humidity <= 60) return 2;
+    if (humidity > 60 && humidity <= 80) return 3;
+    if (humidity > 80 && humidity <= 100) return 4;
+  } else if (temperature > 29 && temperature <= 34) {
+    if (humidity >= 40 && humidity <= 60) return 3;
+    if (humidity > 60 && humidity <= 80) return 4;
+    if (humidity > 80 && humidity <= 100) return 5;
+  } else if (temperature > 34 && temperature <= 39) {
+    if (humidity >= 40 && humidity <= 60) return 4;
+    if (humidity > 60 && humidity <= 100) return 5;
+  } else if (temperature > 39) {
+    if (humidity >= 40 && humidity <= 100) return 5;
+  }
+  return 0;  // Default
+}
+
+void enableLights() {
+  digitalWrite(led, HIGH);
+  lcd.setCursor(17, 3);
+  lcd.print("On ");
+}
+
+void disableLights() {
+  digitalWrite(led, LOW);
+  lcd.setCursor(17, 3);
+  lcd.print("Off");
+}
+
+void openDoor() {
+  servoMotor.write(90); // Open the door by 90 degrees
+  doorIsOpen = true;
+  lcd.setCursor(5, 3);
+  lcd.print("Open");
+}
+
+void closeDoor() {
+  servoMotor.write(0);  // Close the door
+  doorIsOpen = false;
+  lcd.setCursor(5, 3);
+  lcd.print("Clsd");
+}
